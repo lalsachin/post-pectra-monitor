@@ -7,6 +7,7 @@ A Python-based monitoring system for tracking Ethereum validator activities post
 ### Voluntary Exit Monitor
 - Tracks voluntary exit requests in real-time
 - Monitors exit epochs and withdrawable epochs for each validator
+- Gets validator state from head state endpoint for accurate data
 - Updates every 12 seconds (one slot)
 - Stores data in PostgreSQL database
 
@@ -27,8 +28,12 @@ A Python-based monitoring system for tracking Ethereum validator activities post
 - `validator_index`: Validator's index
 - `exit_epoch`: Epoch when the validator will exit
 - `withdrawable_epoch`: Epoch when the validator's balance becomes withdrawable
+- `balance`: Validator's current balance
+- `effective_balance`: Validator's effective balance
+- `pubkey`: Validator's public key
+- `signature`: Exit request signature
 - `slot`: Slot when the exit was detected
-- `timestamp`: When the exit was detected
+- `epoch`: Epoch when the exit was detected
 
 ### validator_withdrawal_credentials
 - `epoch`: Epoch number
@@ -39,9 +44,17 @@ A Python-based monitoring system for tracking Ethereum validator activities post
 
 ### partial_withdrawals
 - `validator_index`: Validator's index
-- `amount`: Amount withdrawn in Gwei
+- `exit_epoch`: Validator's exit epoch
+- `balance`: Validator's current balance
+- `effective_balance`: Validator's effective balance
+- `pubkey`: Validator's public key
+- `recipient_address`: Address receiving the withdrawal
+- `partial_withdrawal_amount`: Amount withdrawn in wei
+- `request_fee_paid`: Fee paid for the request in wei
+- `block_number`: Block number of the withdrawal
+- `transaction_hash`: Transaction hash
 - `slot`: Slot when the withdrawal occurred
-- `timestamp`: When the withdrawal was detected
+- `epoch`: Epoch when the withdrawal occurred
 
 ## Setup
 
@@ -97,6 +110,7 @@ The system provides real-time monitoring through:
 - Detailed logging of all activities
 - Database storage for historical analysis
 - Tracking of validator counts and withdrawal types
+- Real-time validator state information from head state endpoint
 
 ## Requirements
 
