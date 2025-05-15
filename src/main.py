@@ -3,11 +3,12 @@ from dotenv import load_dotenv
 from web3 import Web3
 import logging
 from datetime import datetime
-from monitor import ValidatorExitMonitor
+from monitor import ValidatorExitMonitor, BEACON_API_V2
 import time
 import multiprocessing
 from validator_credentials_monitor import run_validator_credentials_monitor
 from multiprocessing import Process
+import requests
 
 # Create logs directory if it doesn't exist
 os.makedirs('logs', exist_ok=True)
@@ -64,46 +65,38 @@ def run_voluntary_exit_monitor_loop():
     """Run the voluntary exit monitor loop"""
     try:
         monitor = ValidatorExitMonitor()
-        last_epoch = None
         
         while True:
             # Get current block data
-            start_time = time.time()
-            block_data = monitor.get_current_block_data()
-            end_time = time.time()
-            logger.info(f"Block data API call took {end_time - start_time:.2f} seconds")
+            url = f"{BEACON_API_V2}/blocks/head"
+            response = requests.get(url, headers={'accept': 'application/json'})
+            response.raise_for_status()
+            block_data = response.json()
             
-            if block_data:
-                current_slot = block_data['slot']
-                current_epoch = block_data['epoch']
-                num_voluntary_exits = block_data['num_voluntary_exits']
-                num_partial_withdrawals = block_data['num_partial_withdrawals']
-                
-                logger.info(f"Current Slot: {current_slot}")
-                logger.info(f"Current Epoch: {current_epoch}")
-                logger.info(f"Number of voluntary exits: {num_voluntary_exits}")
-                logger.info(f"Number of partial withdrawals: {num_partial_withdrawals}")
-                
-                # Save to database
-                monitor.save_block_data(block_data)
-                
-                # Check if we're in a new epoch
-                if last_epoch is not None and current_epoch > last_epoch:
-                    # If it's an even epoch, spawn validator credentials monitor
-                    if current_epoch % 2 == 0:
-                        logger.info(f"Spawning validator credentials monitor for epoch {current_epoch}")
-                        process = Process(target=run_validator_credentials_monitor)
-                        process.start()
-                        process.join()  # Wait for the process to complete
-                
-                last_epoch = current_epoch
+            if not block_data or 'data' not in block_data or 'message' not in block_data['data']:
+                logger.error("Failed to get block data")
+                time.sleep(12)  # Wait before retrying
+                continue
             
+            current_slot = int(block_data['data']['message']['slot'])
+            current_epoch = current_slot // monitor.SLOTS_PER_EPOCH
+            
+            # Monitor voluntary exits and partial withdrawals
+            status = monitor.monitor_queue(block_data)
+            
+            logger.info(f"Current Slot: {current_slot}")
+            logger.info(f"Current Epoch: {current_epoch}")
+            logger.info(f"Number of voluntary exits: {len(status['voluntary_exits'])}")
+            logger.info(f"Number of partial withdrawals: {len(status['partial_withdrawals'])}")
+            
+            # Sleep until next block
             time.sleep(12)  # Check every 12 seconds
             
     except Exception as e:
         logger.error(f"Error in voluntary exit monitor loop: {str(e)}")
         raise
     finally:
+        # Close database connection
         if hasattr(monitor, 'db'):
             monitor.db.close()
 

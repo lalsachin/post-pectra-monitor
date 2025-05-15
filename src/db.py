@@ -50,18 +50,6 @@ class Database:
                     )
                 """)
                 
-                # Create block_data table
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS block_data (
-                        slot INTEGER PRIMARY KEY,
-                        epoch INTEGER NOT NULL,
-                        timestamp TIMESTAMP NOT NULL,
-                        block_number INTEGER NOT NULL,
-                        num_voluntary_exits INTEGER NOT NULL,
-                        num_partial_withdrawals INTEGER NOT NULL
-                    )
-                """)
-                
                 # Create voluntary_exits table if it doesn't exist
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS voluntary_exits (
@@ -79,9 +67,6 @@ class Database:
                         UNIQUE(validator_index, signature)
                     );
                 """)
-                
-                # Drop existing partial_withdrawals table if it exists
-                cur.execute("DROP TABLE IF EXISTS partial_withdrawals;")
                 
                 # Create partial_withdrawals table
                 cur.execute("""

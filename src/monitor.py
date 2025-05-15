@@ -6,6 +6,7 @@ import os
 from dotenv import load_dotenv
 import requests
 from db import Database
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -52,11 +53,8 @@ class ValidatorExitMonitor:
         ]
         self.contract = self.w3.eth.contract(address=self.contract_address, abi=self.contract_abi)
         
-        # Tracking state
-        self.known_exiting_validators = set()  # Track validators we've already seen
-        self.previous_validator_states = {}  # Track previous validator states
-        self.voluntary_exits_by_block = {}  # Track voluntary exits by block
-        self.last_checked_block = self.w3.eth.block_number  # Track last checked block for partial withdrawals
+        # Track last checked block for partial withdrawals
+        self.last_checked_block = self.w3.eth.block_number
 
     def __del__(self):
         """Cleanup when the monitor is destroyed"""
@@ -188,7 +186,6 @@ class ValidatorExitMonitor:
                     'pubkey': validator['pubkey']
                 }
             
-            logger.info(f"Tracking {len(validator_states)} validators that previously submitted voluntary exits")
             return validator_states
         except requests.exceptions.RequestException as e:
             logger.error(f"Error making request to validators endpoint: {str(e)}")
@@ -372,38 +369,27 @@ class ValidatorExitMonitor:
             logger.error(f"Error getting partial withdrawals: {str(e)}")
             return []
 
-    def monitor_queue(self):
+    def monitor_queue(self, block_data):
         """
         Main monitoring function
         """
         try:
-            # Get current slot and epoch
-            current_slot = self.get_current_slot()
-            current_epoch = self.get_current_epoch()
+            # Get current slot and epoch from block data
+            current_slot = int(block_data['data']['message']['slot'])
+            current_epoch = current_slot // self.SLOTS_PER_EPOCH
             
             # 1. Get voluntary exits from latest block
-            block_data = self.get_block_by_slot(current_slot)
             voluntary_exits = self.get_voluntary_exits_in_block(block_data)
             
             # 2. Get partial withdrawals
             partial_withdrawals = self.get_partial_withdrawals()
             
-            # Track voluntary exits for status monitoring
+            # Save voluntary exits to database
             for exit_data in voluntary_exits:
-                self.voluntary_exits_by_block[exit_data['validator_index']] = {
-                    'exit_epoch': exit_data['exit_epoch'],
-                    'slot': current_slot,
-                    'epoch': current_epoch
-                }
-                
-                # Save voluntary exits to database
                 self.db.save_voluntary_exit(exit_data, current_slot, current_epoch)
                 logger.info(f"New voluntary exit submitted for validator {exit_data['validator_index']} "
                           f"with exit_epoch {exit_data['exit_epoch']} "
                           f"and withdrawable_epoch {exit_data['withdrawable_epoch']}")
-            
-            # Update previous states for next comparison
-            self.previous_validator_states = self.get_validator_states()
             
             status = {
                 'timestamp': datetime.now().isoformat(),
@@ -420,56 +406,32 @@ class ValidatorExitMonitor:
             raise
 
     def get_current_block_data(self):
-        """Get current block data including slot, epoch, and validator exits"""
+        """Get current block data"""
         try:
-            # Get current block number
-            block_number = self.w3.eth.block_number
+            start_time = time.time()
+            # Get current block from beacon chain
+            url = f"{BEACON_API_V2}/blocks/head"
+            response = requests.get(url, headers={'accept': 'application/json'})
+            response.raise_for_status()
+            data = response.json()
             
-            # Get block data
-            block = self.w3.eth.get_block(block_number)
+            if not data or 'data' not in data or 'message' not in data['data']:
+                raise ValueError("Invalid response from beacon chain")
+                
+            current_slot = int(data['data']['message']['slot'])
+            current_epoch = current_slot // self.SLOTS_PER_EPOCH
             
-            # Calculate slot and epoch
-            slot = block_number // 12  # Each block is 12 seconds
-            epoch = slot // 32  # Each epoch is 32 slots
-            
-            # Get voluntary exits and partial withdrawals
-            voluntary_exits = []  # TODO: Implement actual exit detection
-            partial_withdrawals = []  # TODO: Implement actual withdrawal detection
+            end_time = time.time()
+            logger.info(f"Block data API call took {end_time - start_time:.2f} seconds")
             
             return {
-                'slot': slot,
-                'epoch': epoch,
-                'num_voluntary_exits': len(voluntary_exits),
-                'num_partial_withdrawals': len(partial_withdrawals),
-                'timestamp': datetime.utcnow(),
-                'block_number': block_number
+                'slot': current_slot,
+                'epoch': current_epoch
             }
             
         except Exception as e:
             logger.error(f"Error getting current block data: {str(e)}")
             return None
-    
-    def save_block_data(self, block_data):
-        """Save block data to database"""
-        try:
-            with self.db.conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO block_data 
-                    (slot, epoch, timestamp, block_number, num_voluntary_exits, num_partial_withdrawals)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (slot) DO NOTHING
-                """, (
-                    block_data['slot'],
-                    block_data['epoch'],
-                    block_data['timestamp'],
-                    block_data['block_number'],
-                    block_data['num_voluntary_exits'],
-                    block_data['num_partial_withdrawals']
-                ))
-                self.db.conn.commit()
-        except Exception as e:
-            logger.error(f"Error saving block data: {str(e)}")
-            raise
 
 if __name__ == "__main__":
     # Set up logging
