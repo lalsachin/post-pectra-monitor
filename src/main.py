@@ -107,8 +107,13 @@ def main():
         exit_monitor_process = Process(target=run_voluntary_exit_monitor_loop)
         exit_monitor_process.start()
         
-        # Wait for the process to complete
+        # Start validator credentials monitor in a separate process
+        credentials_monitor_process = Process(target=run_validator_credentials_monitor)
+        credentials_monitor_process.start()
+        
+        # Wait for both processes to complete
         exit_monitor_process.join()
+        credentials_monitor_process.join()
         
     except KeyboardInterrupt:
         logger.info("Shutting down...")

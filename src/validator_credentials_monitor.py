@@ -144,45 +144,55 @@ class ValidatorCredentialsMonitor:
             raise
 
 def run_validator_credentials_monitor():
-    """Run the validator credentials monitor"""
+    """Run the validator credentials monitor continuously, checking on even epochs"""
     try:
         monitor = ValidatorCredentialsMonitor()
-        last_epoch = None
+        last_processed_epoch = monitor.last_processed_epoch
         
         while True:
             current_epoch = monitor.get_current_epoch()
             
             if current_epoch is None:
                 logger.error("Failed to get current epoch")
-                time.sleep(12)  # Wait before retrying
+                time.sleep(384)  # Wait an epoch before retrying
                 continue
             
-            # Only process on even epochs
-            if current_epoch % 2 == 0 and (last_epoch is None or current_epoch > last_epoch):
-                logger.info(f"Processing epoch {current_epoch}")
-                
-                # Get current slot
-                current_slot = current_epoch * SLOTS_PER_EPOCH
-                
-                # Get validator credentials
-                num_0x01, num_0x02 = monitor.get_validator_credentials()
-                
-                if num_0x01 is not None and num_0x02 is not None:
-                    # Save to database
-                    monitor.save_validator_credentials(current_epoch, current_slot, num_0x01, num_0x02)
+            # Only process if we haven't processed this epoch yet
+            if current_epoch > last_processed_epoch:
+                # Only collect data on even epochs
+                if current_epoch % 2 == 0:
+                    logger.info(f"Processing epoch {current_epoch}")
                     
-                    logger.info(f"Epoch {current_epoch} stats:")
-                    logger.info(f"  0x01 validators: {num_0x01}")
-                    logger.info(f"  0x02 validators: {num_0x02}")
+                    # Get current slot
+                    current_slot = current_epoch * SLOTS_PER_EPOCH
+                    
+                    # Get validator credentials
+                    num_0x01, num_0x02 = monitor.get_validator_credentials()
+                    
+                    if num_0x01 is not None and num_0x02 is not None:
+                        # Save to database
+                        monitor.save_validator_credentials(current_epoch, current_slot, num_0x01, num_0x02)
+                        
+                        logger.info(f"Epoch {current_epoch} stats:")
+                        logger.info(f"  0x01 validators: {num_0x01}")
+                        logger.info(f"  0x02 validators: {num_0x02}")
+                        
+                        # Sleep for 2 epochs since we only need to check on even epochs
+                        time.sleep(768)  # 2 epochs (2 * 32 slots * 12 seconds)
+                    else:
+                        logger.error("Failed to get validator credentials")
+                        time.sleep(384)  # Wait an epoch before retrying
                 else:
-                    logger.error("Failed to get validator credentials")
+                    logger.info(f"Skipping validator credentials collection for odd epoch {current_epoch}")
+                    time.sleep(384)  # Wait an epoch before checking again
                 
-                last_epoch = current_epoch
-            
-            time.sleep(12)  # Check every 12 seconds
+                last_processed_epoch = current_epoch
+            else:
+                # If we've already processed this epoch, wait an epoch before checking again
+                time.sleep(384)
             
     except Exception as e:
-        logger.error(f"Error running validator credentials monitor: {str(e)}")
+        logger.error(f"Error in validator credentials monitor loop: {str(e)}")
         raise
     finally:
         # Close database connection
