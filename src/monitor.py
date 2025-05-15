@@ -436,17 +436,24 @@ class ValidatorExitMonitor:
             # 2. Get partial withdrawals
             partial_withdrawals = self.get_partial_withdrawals()
             
-            # 3. Get active exiting validators data
-            active_exiting_data = self.get_active_exiting_validators()
-            if active_exiting_data:
-                active_exiting_data.update({
-                    'slot': current_slot,
-                    'epoch': current_epoch
-                })
-                self.db.save_full_exits_queue(active_exiting_data)
-                logger.info(f"Active exiting validators: {active_exiting_data['validators_in_queue']}")
-                logger.info(f"Earliest exit epoch: {active_exiting_data['earliest_exit_epoch']}")
-                logger.info(f"Latest exit epoch: {active_exiting_data['latest_exit_epoch']}")
+            # 3. Get active exiting validators data if:
+            #    a) We found new voluntary exits, or
+            #    b) This is the first run (no previous slot tracked)
+            active_exiting_data = None
+            if voluntary_exits or not hasattr(self, 'last_processed_slot'):
+                active_exiting_data = self.get_active_exiting_validators()
+                if active_exiting_data:
+                    active_exiting_data.update({
+                        'slot': current_slot,
+                        'epoch': current_epoch
+                    })
+                    self.db.save_full_exits_queue(active_exiting_data)
+                    logger.info(f"Active exiting validators: {active_exiting_data['validators_in_queue']}")
+                    logger.info(f"Earliest exit epoch: {active_exiting_data['earliest_exit_epoch']}")
+                    logger.info(f"Latest exit epoch: {active_exiting_data['latest_exit_epoch']}")
+            
+            # Update last processed slot
+            self.last_processed_slot = current_slot
             
             # Save voluntary exits to database
             for exit_data in voluntary_exits:
