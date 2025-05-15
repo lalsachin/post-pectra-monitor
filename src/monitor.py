@@ -120,25 +120,43 @@ class ValidatorExitMonitor:
                 return []
 
             voluntary_exits = []
+            validator_indices = []
+            exit_data_map = {}  # Map to store exit data by validator index
+            
+            # First collect all validator indices and their exit data
             for exit_data in message['body']['voluntary_exits']:
                 validator_index = int(exit_data['message']['validator_index'])
-                
-                # Get validator state using pubkey
-                url = f"{BEACON_API_V1}/states/head/validators/{validator_index}"
-                response = requests.get(url, headers={'accept': 'application/json'})
-                response.raise_for_status()
-                validator_data = response.json()
-                
-                if not validator_data or 'data' not in validator_data:
-                    logger.warning(f"No data received for validator {validator_index}")
+                validator_indices.append(validator_index)
+                exit_data_map[validator_index] = exit_data
+
+            if not validator_indices:
+                return []
+
+            # Batch query all validators at once
+            validator_ids = '&'.join([f'id={idx}' for idx in validator_indices])
+            url = f"{BEACON_API_V1}/states/head/validators?{validator_ids}"
+            response = requests.get(url, headers={'accept': 'application/json'})
+            response.raise_for_status()
+            validators_data = response.json()
+            
+            if not validators_data or 'data' not in validators_data:
+                logger.warning("No data received for validators")
+                return []
+
+            # Process all validators data
+            for validator_data in validators_data['data']:
+                validator_index = int(validator_data['index'])
+                if validator_index not in exit_data_map:
                     continue
+
+                validator = validator_data['validator']
+                exit_data = exit_data_map[validator_index]
                 
-                validator = validator_data['data']['validator']
                 voluntary_exit = {
                     'validator_index': validator_index,
                     'exit_epoch': int(validator['exit_epoch']),
                     'withdrawable_epoch': int(validator['withdrawable_epoch']),
-                    'balance': int(validator_data['data']['balance']),
+                    'balance': int(validator_data['balance']),
                     'effective_balance': int(validator['effective_balance']),
                     'pubkey': validator['pubkey'],
                     'signature': exit_data['signature']
@@ -314,55 +332,75 @@ class ValidatorExitMonitor:
             current_slot = self.get_current_slot()
             current_epoch = self.get_current_epoch()
             
-            # Process logs
+            # Process logs and collect validator addresses
             withdrawals = []
+            validator_addresses = []
+            withdrawal_data_map = {}  # Map to store withdrawal data by validator address
+            
             for log in logs:
                 try:
                     decoded = self.contract.events.PartialWithdrawalRequested().processLog(log)
-                    
-                    # Get validator information from beacon chain
                     validator_address = decoded.args.validator
-                    url = f"{BEACON_API_V1}/states/head/validators/{validator_address}"
-                    response = requests.get(url, headers={'accept': 'application/json'})
-                    response.raise_for_status()
-                    validator_data = response.json()
-                    
-                    if not validator_data or 'data' not in validator_data:
-                        logger.warning(f"No data received for validator {validator_address}")
-                        continue
-                    
-                    validator = validator_data['data']['validator']
-                    withdrawal = {
-                        'validator_index': int(validator_data['data']['index']),
-                        'exit_epoch': int(validator['exit_epoch']),
-                        'balance': int(validator_data['data']['balance']),
-                        'effective_balance': int(validator['effective_balance']),
-                        'pubkey': validator['pubkey'],
-                        'recipient_address': decoded.args.recipient,
-                        'partial_withdrawal_amount': decoded.args.amount,
-                        'request_fee_paid': decoded.args.fee,
-                        'block_number': int(log['blockNumber'], 16),
-                        'transaction_hash': log['transactionHash'],
-                        'slot': current_slot,
-                        'epoch': current_epoch
+                    validator_addresses.append(validator_address)
+                    withdrawal_data_map[validator_address] = {
+                        'decoded': decoded,
+                        'log': log
                     }
-                    withdrawals.append(withdrawal)
-                    
-                    # Save to database
-                    self.db.save_partial_withdrawal(withdrawal)
-                    
-                    logger.info(f"Found partial withdrawal request:")
-                    logger.info(f"  Validator Index: {withdrawal['validator_index']}")
-                    logger.info(f"  Exit Epoch: {withdrawal['exit_epoch']}")
-                    logger.info(f"  Balance: {withdrawal['balance']}")
-                    logger.info(f"  Effective Balance: {withdrawal['effective_balance']}")
-                    logger.info(f"  Recipient: {withdrawal['recipient_address']}")
-                    logger.info(f"  Amount: {withdrawal['partial_withdrawal_amount']} wei")
-                    logger.info(f"  Fee: {withdrawal['request_fee_paid']} wei")
-                    
                 except Exception as e:
                     logger.error(f"Error decoding partial withdrawal log: {str(e)}")
                     continue
+
+            if not validator_addresses:
+                return []
+
+            # Batch query all validators at once
+            validator_ids = '&'.join([f'id={addr}' for addr in validator_addresses])
+            url = f"{BEACON_API_V1}/states/head/validators?{validator_ids}"
+            response = requests.get(url, headers={'accept': 'application/json'})
+            response.raise_for_status()
+            validators_data = response.json()
+            
+            if not validators_data or 'data' not in validators_data:
+                logger.warning("No data received for validators")
+                return []
+
+            # Process all validators data
+            for validator_data in validators_data['data']:
+                validator_address = validator_data['validator']['pubkey']
+                if validator_address not in withdrawal_data_map:
+                    continue
+
+                withdrawal_info = withdrawal_data_map[validator_address]
+                decoded = withdrawal_info['decoded']
+                log = withdrawal_info['log']
+                
+                withdrawal = {
+                    'validator_index': int(validator_data['index']),
+                    'exit_epoch': int(validator_data['validator']['exit_epoch']),
+                    'balance': int(validator_data['balance']),
+                    'effective_balance': int(validator_data['validator']['effective_balance']),
+                    'pubkey': validator_data['validator']['pubkey'],
+                    'recipient_address': decoded.args.recipient,
+                    'partial_withdrawal_amount': decoded.args.amount,
+                    'request_fee_paid': decoded.args.fee,
+                    'block_number': int(log['blockNumber'], 16),
+                    'transaction_hash': log['transactionHash'],
+                    'slot': current_slot,
+                    'epoch': current_epoch
+                }
+                withdrawals.append(withdrawal)
+                
+                # Save to database
+                self.db.save_partial_withdrawal(withdrawal)
+                
+                logger.info(f"Found partial withdrawal request:")
+                logger.info(f"  Validator Index: {withdrawal['validator_index']}")
+                logger.info(f"  Exit Epoch: {withdrawal['exit_epoch']}")
+                logger.info(f"  Balance: {withdrawal['balance']}")
+                logger.info(f"  Effective Balance: {withdrawal['effective_balance']}")
+                logger.info(f"  Recipient: {withdrawal['recipient_address']}")
+                logger.info(f"  Amount: {withdrawal['partial_withdrawal_amount']} wei")
+                logger.info(f"  Fee: {withdrawal['request_fee_paid']} wei")
             
             return withdrawals
         except Exception as e:
@@ -393,8 +431,12 @@ class ValidatorExitMonitor:
                     'first_validator_index': 0,
                     'first_validator_pubkey': '',
                     'last_validator_index': 0,
-                    'last_validator_pubkey': ''
+                    'last_validator_pubkey': '',
+                    'balance_in_queue': 0
                 }
+            
+            # Calculate total balance in queue
+            total_balance = sum(int(v['balance']) for v in validators)
             
             # Sort validators by exit_epoch
             sorted_validators = sorted(
@@ -415,7 +457,8 @@ class ValidatorExitMonitor:
                 'first_validator_index': int(first_validator['index']),
                 'first_validator_pubkey': first_validator['validator']['pubkey'],
                 'last_validator_index': int(last_validator['index']),
-                'last_validator_pubkey': last_validator['validator']['pubkey']
+                'last_validator_pubkey': last_validator['validator']['pubkey'],
+                'balance_in_queue': total_balance
             }
         except Exception as e:
             logger.error(f"Error getting active exiting validators: {str(e)}")
