@@ -369,6 +369,58 @@ class ValidatorExitMonitor:
             logger.error(f"Error getting partial withdrawals: {str(e)}")
             return []
 
+    def get_active_exiting_validators(self):
+        """
+        Get all validators with active_exiting status and find the ones with earliest and latest exit epochs
+        """
+        try:
+            url = f"{BEACON_API_V1}/states/head/validators?status=active_exiting"
+            response = requests.get(url, headers={'accept': 'application/json'})
+            response.raise_for_status()
+            data = response.json()
+            
+            if not data or 'data' not in data:
+                return None
+                
+            validators = data['data']
+            if not validators:
+                return {
+                    'validators_in_queue': 0,
+                    'earliest_exit_epoch': 0,
+                    'earliest_withdrawable_epoch': 0,
+                    'latest_exit_epoch': 0,
+                    'lastest_withdrawable_epoch': 0,
+                    'first_validator_index': 0,
+                    'first_validator_pubkey': '',
+                    'last_validator_index': 0,
+                    'last_validator_pubkey': ''
+                }
+            
+            # Sort validators by exit_epoch
+            sorted_validators = sorted(
+                validators,
+                key=lambda x: int(x['validator']['exit_epoch'])
+            )
+            
+            # Get first (earliest) and last (latest) validators
+            first_validator = sorted_validators[0]
+            last_validator = sorted_validators[-1]
+            
+            return {
+                'validators_in_queue': len(validators),
+                'earliest_exit_epoch': int(first_validator['validator']['exit_epoch']),
+                'earliest_withdrawable_epoch': int(first_validator['validator']['withdrawable_epoch']),
+                'latest_exit_epoch': int(last_validator['validator']['exit_epoch']),
+                'lastest_withdrawable_epoch': int(last_validator['validator']['withdrawable_epoch']),
+                'first_validator_index': int(first_validator['index']),
+                'first_validator_pubkey': first_validator['validator']['pubkey'],
+                'last_validator_index': int(last_validator['index']),
+                'last_validator_pubkey': last_validator['validator']['pubkey']
+            }
+        except Exception as e:
+            logger.error(f"Error getting active exiting validators: {str(e)}")
+            return None
+
     def monitor_queue(self, block_data):
         """
         Main monitoring function
@@ -384,6 +436,18 @@ class ValidatorExitMonitor:
             # 2. Get partial withdrawals
             partial_withdrawals = self.get_partial_withdrawals()
             
+            # 3. Get active exiting validators data
+            active_exiting_data = self.get_active_exiting_validators()
+            if active_exiting_data:
+                active_exiting_data.update({
+                    'slot': current_slot,
+                    'epoch': current_epoch
+                })
+                self.db.save_full_exits_queue(active_exiting_data)
+                logger.info(f"Active exiting validators: {active_exiting_data['validators_in_queue']}")
+                logger.info(f"Earliest exit epoch: {active_exiting_data['earliest_exit_epoch']}")
+                logger.info(f"Latest exit epoch: {active_exiting_data['latest_exit_epoch']}")
+            
             # Save voluntary exits to database
             for exit_data in voluntary_exits:
                 self.db.save_voluntary_exit(exit_data, current_slot, current_epoch)
@@ -396,7 +460,8 @@ class ValidatorExitMonitor:
                 'slot': current_slot,
                 'current_epoch': current_epoch,
                 'voluntary_exits': voluntary_exits,
-                'partial_withdrawals': partial_withdrawals
+                'partial_withdrawals': partial_withdrawals,
+                'active_exiting': active_exiting_data
             }
             
             return status

@@ -89,6 +89,25 @@ class Database:
                     );
                 """)
                 
+                # Create full_exits_queue table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS full_exits_queue (
+                        id SERIAL PRIMARY KEY,
+                        slot INTEGER NOT NULL,
+                        epoch INTEGER NOT NULL,
+                        validators_in_queue INTEGER NOT NULL,
+                        earliest_exit_epoch INTEGER NOT NULL,
+                        earliest_withdrawable_epoch INTEGER NOT NULL,
+                        latest_exit_epoch INTEGER NOT NULL,
+                        lastest_withdrawable_epoch INTEGER NOT NULL,
+                        first_validator_index INTEGER NOT NULL,
+                        first_validator_pubkey TEXT NOT NULL,
+                        last_validator_index INTEGER NOT NULL,
+                        last_validator_pubkey TEXT NOT NULL,
+                        timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                
                 # Create indexes for voluntary_exits if they don't exist
                 cur.execute("""
                     CREATE INDEX IF NOT EXISTS idx_voluntary_exits_validator_index 
@@ -114,6 +133,18 @@ class Database:
                     
                     CREATE INDEX IF NOT EXISTS idx_partial_withdrawals_exit_epoch 
                     ON partial_withdrawals(exit_epoch);
+                """)
+                
+                # Create indexes for full_exits_queue
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_full_exits_queue_slot 
+                    ON full_exits_queue(slot);
+                    
+                    CREATE INDEX IF NOT EXISTS idx_full_exits_queue_epoch 
+                    ON full_exits_queue(epoch);
+                    
+                    CREATE INDEX IF NOT EXISTS idx_full_exits_queue_exit_epochs 
+                    ON full_exits_queue(earliest_exit_epoch, latest_exit_epoch);
                 """)
                 
                 self.conn.commit()
@@ -176,6 +207,36 @@ class Database:
                 self.conn.commit()
         except Exception as e:
             logger.error(f"Error saving partial withdrawal: {str(e)}")
+            raise
+
+    def save_full_exits_queue(self, queue_data):
+        """Save full exits queue information"""
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO full_exits_queue 
+                    (slot, epoch, validators_in_queue, 
+                     earliest_exit_epoch, earliest_withdrawable_epoch,
+                     latest_exit_epoch, lastest_withdrawable_epoch,
+                     first_validator_index, first_validator_pubkey,
+                     last_validator_index, last_validator_pubkey)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    queue_data['slot'],
+                    queue_data['epoch'],
+                    queue_data['validators_in_queue'],
+                    queue_data['earliest_exit_epoch'],
+                    queue_data['earliest_withdrawable_epoch'],
+                    queue_data['latest_exit_epoch'],
+                    queue_data['lastest_withdrawable_epoch'],
+                    queue_data['first_validator_index'],
+                    queue_data['first_validator_pubkey'],
+                    queue_data['last_validator_index'],
+                    queue_data['last_validator_pubkey']
+                ))
+                self.conn.commit()
+        except Exception as e:
+            logger.error(f"Error saving full exits queue data: {str(e)}")
             raise
 
     def close(self):
