@@ -1,128 +1,106 @@
-# Ethereum Validator Exit Monitor
+# Ethereum Post-Pectra Monitor
 
-A monitoring tool for tracking Ethereum validator exits, focusing on the transition from voluntary exit submission to active_exiting status.
-
-## Overview
-
-This tool monitors the Ethereum validator exit queue, tracking:
-- Voluntary exits submitted in each block
-- Validators transitioning to active_exiting status
-- Exit and withdrawable epochs for exiting validators
-- Historical exit data in PostgreSQL database
+A Python-based monitoring system for tracking Ethereum validator activities post-Pectra upgrade, focusing on voluntary exits, partial withdrawals, and validator withdrawal credentials.
 
 ## Features
 
-- Real-time monitoring of validator status changes
-- Efficient API usage with filtered queries for active_exiting validators
-- Double verification of validator status changes
-- PostgreSQL database storage for:
-  - Voluntary exits
-  - Exiting validators
-  - Historical status changes
-- Detailed logging of:
-  - New voluntary exits
-  - Status transitions
-  - Exit and withdrawable epochs
-  - Validator balances
+### Voluntary Exit Monitor
+- Tracks voluntary exit requests in real-time
+- Monitors exit epochs and withdrawable epochs for each validator
+- Updates every 12 seconds (one slot)
+- Stores data in PostgreSQL database
 
-## Setup
+### Validator Credentials Monitor
+- Tracks validator withdrawal credentials (0x01 and 0x02)
+- Collects data every 2 epochs (768 seconds) on even epochs
+- Optimized to reduce API calls using shared cache
+- Stores data in PostgreSQL database
 
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd ethereum_post_pectra_monitor
-```
-
-2. Create and activate virtual environment:
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-3. Install dependencies:
-```bash
-pip3 install -r requirements.txt
-```
-
-4. Configure environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your configuration:
-# - QUICKNODE_URL: Your Ethereum node URL
-# - DB_NAME: PostgreSQL database name (default: validator_exits)
-# - DB_USER: PostgreSQL username (default: postgres)
-# - DB_PASSWORD: PostgreSQL password
-# - DB_HOST: PostgreSQL host (default: localhost)
-# - DB_PORT: PostgreSQL port (default: 5432)
-```
-
-5. Run the monitor:
-```bash
-python3 src/main.py
-```
+### Partial Withdrawals Monitor
+- Tracks partial withdrawals in real-time
+- Updates every 12 seconds (one slot)
+- Stores data in PostgreSQL database
 
 ## Database Schema
 
-### Voluntary Exits Table
-- `id`: Serial primary key
-- `validator_index`: Validator index
-- `exit_epoch`: Epoch when the exit was submitted
-- `signature`: Exit signature
-- `block_slot`: Block slot when exit was submitted
-- `block_epoch`: Block epoch when exit was submitted
-- `timestamp`: When the exit was recorded
+### voluntary_exits
+- `validator_index`: Validator's index
+- `exit_epoch`: Epoch when the validator will exit
+- `withdrawable_epoch`: Epoch when the validator's balance becomes withdrawable
+- `slot`: Slot when the exit was detected
+- `timestamp`: When the exit was detected
 
-### Exiting Validators Table
-- `id`: Serial primary key
-- `validator_index`: Validator index
-- `status`: Current validator status
-- `exit_epoch`: Epoch when validator will exit
-- `withdrawable_epoch`: Epoch when validator can withdraw
-- `balance`: Current validator balance
-- `effective_balance`: Current effective balance
-- `pubkey`: Validator public key
-- `previous_status`: Previous validator status
-- `timestamp`: When the status change was recorded
+### validator_withdrawal_credentials
+- `epoch`: Epoch number
+- `slot`: Slot number
+- `timestamp`: When the data was collected
+- `num_0x01_validators`: Number of validators with 0x01 credentials
+- `num_0x02_validators`: Number of validators with 0x02 credentials
 
-## Monitoring Process
+### partial_withdrawals
+- `validator_index`: Validator's index
+- `amount`: Amount withdrawn in Gwei
+- `slot`: Slot when the withdrawal occurred
+- `timestamp`: When the withdrawal was detected
 
-1. **Voluntary Exit Detection**
-   - Monitors each block for voluntary exits
-   - Records exit details in database
-   - Tracks validators that have submitted exits
+## Setup
 
-2. **Status Change Detection**
-   - Efficiently queries only active_exiting validators
-   - Compares with previous state to detect changes
-   - Verifies status changes with individual validator checks
-
-3. **Data Storage**
-   - Saves voluntary exits to database
-   - Records validator status changes
-   - Maintains historical exit data
-
-## Project Structure
-
-```
-ethereum_post_pectra_monitor/
-├── src/
-│   ├── main.py
-│   ├── monitor.py
-│   └── utils.py
-├── tests/
-├── requirements.txt
-├── .env.example
-└── README.md
+1. Create a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-## Contributing
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+3. Set up PostgreSQL database:
+```bash
+psql -d validator_exits -f src/schema.sql
+```
 
-## License
+4. Run the monitors:
+```bash
+python src/main.py
+```
 
-MIT License 
+## Architecture
+
+The system uses a multi-process architecture:
+- Each monitor runs in its own process
+- Shared cache for epoch/slot data to reduce API calls
+- Independent database connections for each process
+- Graceful shutdown handling
+
+## Optimizations
+
+1. Shared Cache
+   - Caches epoch and slot data for 12 seconds
+   - Reduces duplicate API calls to the beacon chain
+   - Used by both voluntary exit and validator credentials monitors
+
+2. Efficient Scheduling
+   - Voluntary exit monitor: Every 12 seconds (one slot)
+   - Validator credentials monitor: Every 2 epochs (768 seconds) on even epochs
+   - Partial withdrawals monitor: Every 12 seconds (one slot)
+
+3. Database Optimizations
+   - Uses UPSERT operations to prevent duplicates
+   - Efficient indexing on frequently queried columns
+   - Connection pooling for better performance
+
+## Monitoring
+
+The system provides real-time monitoring through:
+- Detailed logging of all activities
+- Database storage for historical analysis
+- Tracking of validator counts and withdrawal types
+
+## Requirements
+
+- Python 3.8+
+- PostgreSQL 12+
+- QuickNode API access
+- Required Python packages (see requirements.txt) 

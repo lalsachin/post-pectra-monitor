@@ -3,6 +3,7 @@ import time
 import logging
 from datetime import datetime
 from db import Database
+from shared_cache import shared_cache
 
 # Configure logging
 logging.basicConfig(
@@ -50,6 +51,24 @@ class ValidatorCredentialsMonitor:
                 return None
         except Exception as e:
             logger.error(f"Error getting current epoch: {str(e)}")
+            return None
+
+    def get_current_slot(self):
+        """Get the current slot"""
+        try:
+            url = f"{BEACON_API_V2}/blocks/head"
+            headers = {'accept': 'application/json'}
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            
+            if 'data' in data and 'message' in data['data'] and 'slot' in data['data']['message']:
+                return int(data['data']['message']['slot'])
+            else:
+                logger.error(f"Unexpected response format: {data}")
+                return None
+        except Exception as e:
+            logger.error(f"Error getting current slot: {str(e)}")
             return None
     
     def get_validator_credentials(self):
@@ -150,21 +169,27 @@ def run_validator_credentials_monitor():
         last_processed_epoch = monitor.last_processed_epoch
         
         while True:
-            current_epoch = monitor.get_current_epoch()
+            # Try to get from cache first
+            current_epoch, current_slot = shared_cache.get_current_epoch_and_slot()
             
-            if current_epoch is None:
-                logger.error("Failed to get current epoch")
-                time.sleep(384)  # Wait an epoch before retrying
-                continue
+            # If cache is empty or expired, get fresh data
+            if current_epoch is None or current_slot is None:
+                current_epoch = monitor.get_current_epoch()
+                current_slot = monitor.get_current_slot()
+                
+                if current_epoch is None or current_slot is None:
+                    logger.error("Failed to get current epoch/slot")
+                    time.sleep(384)  # Wait an epoch before retrying
+                    continue
+                
+                # Update the cache
+                shared_cache.update_epoch_and_slot(current_epoch, current_slot)
             
             # Only process if we haven't processed this epoch yet
             if current_epoch > last_processed_epoch:
                 # Only collect data on even epochs
                 if current_epoch % 2 == 0:
                     logger.info(f"Processing epoch {current_epoch}")
-                    
-                    # Get current slot
-                    current_slot = current_epoch * SLOTS_PER_EPOCH
                     
                     # Get validator credentials
                     num_0x01, num_0x02 = monitor.get_validator_credentials()
