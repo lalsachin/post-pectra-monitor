@@ -53,11 +53,8 @@ class ValidatorExitMonitor:
         ]
         self.contract = self.w3.eth.contract(address=self.contract_address, abi=self.contract_abi)
         
-        # Tracking state
-        self.known_exiting_validators = set()  # Track validators we've already seen
-        self.previous_validator_states = {}  # Track previous validator states
-        self.voluntary_exits_by_block = {}  # Track voluntary exits by block
-        self.last_checked_block = self.w3.eth.block_number  # Track last checked block for partial withdrawals
+        # Track last checked block for partial withdrawals
+        self.last_checked_block = self.w3.eth.block_number
 
     def __del__(self):
         """Cleanup when the monitor is destroyed"""
@@ -189,7 +186,6 @@ class ValidatorExitMonitor:
                     'pubkey': validator['pubkey']
                 }
             
-            logger.info(f"Tracking {len(validator_states)} validators that previously submitted voluntary exits")
             return validator_states
         except requests.exceptions.RequestException as e:
             logger.error(f"Error making request to validators endpoint: {str(e)}")
@@ -388,22 +384,12 @@ class ValidatorExitMonitor:
             # 2. Get partial withdrawals
             partial_withdrawals = self.get_partial_withdrawals()
             
-            # Track voluntary exits for status monitoring
+            # Save voluntary exits to database
             for exit_data in voluntary_exits:
-                self.voluntary_exits_by_block[exit_data['validator_index']] = {
-                    'exit_epoch': exit_data['exit_epoch'],
-                    'slot': current_slot,
-                    'epoch': current_epoch
-                }
-                
-                # Save voluntary exits to database
                 self.db.save_voluntary_exit(exit_data, current_slot, current_epoch)
                 logger.info(f"New voluntary exit submitted for validator {exit_data['validator_index']} "
                           f"with exit_epoch {exit_data['exit_epoch']} "
                           f"and withdrawable_epoch {exit_data['withdrawable_epoch']}")
-            
-            # Update previous states for next comparison
-            self.previous_validator_states = self.get_validator_states()
             
             status = {
                 'timestamp': datetime.now().isoformat(),
